@@ -22,3 +22,7 @@ RUN python -m pip install -e .
 RUN pip install catboost
 RUN pip install xgboost
 RUN pip install tables
+
+# [FORK] Newer MLflow refuses the file-store tracking backend (./mlruns) and aborts
+# qrun unless this opt-out is set. qlib's backtest uses the file store. See FORK.md §6.
+ENV MLFLOW_ALLOW_FILE_STORE=true

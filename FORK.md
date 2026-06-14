@@ -269,6 +269,8 @@ rdagent server_ui             # Web UI 后端
 |---|---|---|---|---|
 | 2026-06-14 | 加入 fork 治理文档骨架（本文件 + CLAUDE.md + commit 门禁 + setup 脚本） | 把自用 fork 工作流（同步上游/可追踪定制/commit 区分）固化下来 | `FORK.md`、`CLAUDE.md`、`.githooks/commit-msg`、`scripts/setup-hooks.sh`（均新增） | 否（纯新增，不碰上游代码） |
 | 2026-06-14 | qlib 场景从 A 股改为**美股**（`cn_data→us_data`、`region cn→us`、`market csi300→sp500`、`benchmark SH000300→^GSPC`）| 我们研究美股不研究 A 股；us_data 已下到 `~/.qlib/qlib_data/us_data`（值取自姊妹 fork `qlib` 的 US workflow）。RD-Agent 无 region/market 配置开关，模板按固定路径加载，只能改模板 | `rdagent/scenarios/qlib/experiment/factor_template/*.yaml`(3)、`model_template/*.yaml`(2)、`factor_data_template/generate.py`，均 `# [FORK]` 标记 | **是**（6 文件，侵入式；同步上游时这几个模板若被上游改要留意冲突）|
+| 2026-06-14 | 修 `QTDockerEnv.prepare()`：空 `extra_volumes` 提前返回（修运行时探测的 `StopIteration`）+ 检查 `us_data` 而非写死下载 `cn_data` | fin_model 在 `env_type=docker` 下，运行时探测用空挂载调 `get_model_env()` → `next(iter({}))` 崩；且原逻辑写死自动下 A 股 cn_data | `rdagent/utils/env.py`（`# [FORK]`）| **是**（核心文件，上游常改，合并冲突风险高）|
+| 2026-06-14 | qlib 镜像加 `ENV MLFLOW_ALLOW_FILE_STORE=true` | 新版 MLflow 拒绝文件存储后端、qrun 回测会 abort，需此 opt-out | `rdagent/scenarios/qlib/docker/Dockerfile`（`# [FORK]`，需重建镜像）| **是**（1 行）|
 
 > 注：上游 `.gitignore` 第 190 行 ignore 了整个 `scripts/`，故 `scripts/setup-hooks.sh` 是
 > **`git add -f` 强制追踪**的（刻意不改上游 `.gitignore`，避免无谓的差异/合并冲突）。

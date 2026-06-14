@@ -1519,13 +1519,20 @@ class QTDockerEnv(DockerEnv):
         Download image & data if it doesn't exist
         """
         super().prepare()
+        # [FORK] (1) the runtime-probe calls get_model_env()/get_factor_env() with empty
+        # extra_volumes, which made next(iter({})) raise StopIteration — guard it.
+        # (2) we research US equities and pre-download us_data ourselves (see FORK.md
+        # §5/§6); never auto-download the hardcoded A-share cn_data. See FORK.md §6.
+        if not self.conf.extra_volumes:
+            return
         qlib_data_path = next(iter(self.conf.extra_volumes.keys()))
-        if not (Path(qlib_data_path) / "qlib_data" / "cn_data").exists():
-            logger.info("We are downloading!")
-            cmd = "python -m qlib.run.get_data qlib_data --target_dir ~/.qlib/qlib_data/cn_data --region cn --interval 1d --delete_old False"
-            self.check_output(entry=cmd)
+        if (Path(qlib_data_path) / "qlib_data" / "us_data").exists():
+            logger.info("US qlib data already exists. Download skipped.")
         else:
-            logger.info("Data already exists. Download skipped.")
+            logger.warning(
+                f"US qlib data not found under {qlib_data_path}/qlib_data/us_data; "
+                "expected pre-downloaded (see FORK.md §5). NOT auto-downloading cn_data."
+            )
 
 
 class KGDockerEnv(DockerEnv):
