@@ -26,6 +26,16 @@ RUN pip install catboost
 RUN pip install xgboost
 RUN pip install tables
 
+# [FORK] Upgrade torch to a CUDA 12.8 build with Blackwell (sm_120) kernels so the
+# RTX 5090 can train PyTorch models (e.g. qlib's GRU) on GPU. The base image's
+# torch 2.2.1+cu121 has NO sm_120 kernels -> "CUDA error: no kernel image is available".
+# cu128 is proven on this host (vllm-venv torch 2.11.0+cu128 lists sm_120; verified a
+# GPU matmul + GRU forward on the 5090 inside this image). The wheel bundles its own
+# CUDA 12.8 runtime, so it overrides the base's cu121. See FORK.md §9.0/§9.9.
+# (Host CUDA-13.2 toolkit is irrelevant here — the container ships its own CUDA via
+#  this wheel; only the host driver, 610.47, must be new enough, and it is.)
+RUN pip install --index-url https://download.pytorch.org/whl/cu128 --upgrade torch
+
 # [FORK] Newer MLflow refuses the file-store tracking backend (./mlruns) and aborts
 # qrun unless this opt-out is set. qlib's backtest uses the file store. See FORK.md §6.
 ENV MLFLOW_ALLOW_FILE_STORE=true

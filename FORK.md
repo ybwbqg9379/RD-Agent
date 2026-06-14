@@ -7,8 +7,8 @@
 > **读者**：未来的我，以及任何进入本仓库的 agent（Claude Code / Codex 等）。
 > **维护**：每次新增/修改定制，或同步一次上游，都要回来更新对应章节 + 底部"最后更新"。
 >
-> **最后更新**：2026-06-14（环境跑通 + 首个美股回测结果；RD-Agent 循环有 China-only/SDK bug，已用
-> `rdagent/custom/` 薄驱动绕过直接 qrun，见 §9.7/§9.8/§10）
+> **最后更新**：2026-06-14（环境跑通 + 美股回测结果 ×2；GPU 镜像就绪[cu128/sm_120]；RD-Agent 循环有
+> China-only/SDK bug，已用 `rdagent/custom/` 薄驱动绕过直接 qrun，见 §9.7/§9.8/§9.9/§10）
 
 ---
 
@@ -273,7 +273,8 @@ rdagent server_ui             # Web UI 后端
 | 2026-06-14 | 修 `QTDockerEnv.prepare()`：空 `extra_volumes` 提前返回（修运行时探测的 `StopIteration`）+ 检查 `us_data` 而非写死下载 `cn_data` | fin_model 在 `env_type=docker` 下，运行时探测用空挂载调 `get_model_env()` → `next(iter({}))` 崩；且原逻辑写死自动下 A 股 cn_data | `rdagent/utils/env.py`（`# [FORK]`）| **是**（核心文件，上游常改，合并冲突风险高）|
 | 2026-06-14 | qlib 镜像加 `ENV MLFLOW_ALLOW_FILE_STORE=true` | 新版 MLflow 拒绝文件存储后端、qrun 回测会 abort，需此 opt-out | `rdagent/scenarios/qlib/docker/Dockerfile`（`# [FORK]`，需重建镜像）| **是**（1 行）|
 | 2026-06-14 | qlib 镜像改用姊妹 fork `ybwbqg9379/qlib`（替代上游固定老 commit）| 连上我们的 qlib fork + 用能读 us_data 的较新 qlib | `rdagent/scenarios/qlib/docker/Dockerfile`（`# [FORK]`）| **是**（1 行 clone URL）|
-| 2026-06-14 | 新增 `rdagent/custom/` 私有包 + 美股回测薄驱动 | RD-Agent 的 fin_* 循环有 China-only/docker-SDK bug（§9.7）；薄驱动绕过它、直接 qrun 出美股回测 | `rdagent/custom/__init__.py`、`rdagent/custom/us_qlib_backtest.py`（均新增）| 否（纯新增私有目录）|
+| 2026-06-14 | 新增 `rdagent/custom/` 私有包 + 美股回测薄驱动 | RD-Agent 的 fin_* 循环有 China-only/docker-SDK bug（§9.7）；薄驱动绕过它、直接 qrun 出美股回测 | `rdagent/custom/__init__.py`、`rdagent/custom/us_qlib_backtest.py`（均新增；后者支持 `--gpu`）| 否（纯新增私有目录）|
+| 2026-06-14 | qlib 镜像升级 torch 到 cu128（Blackwell/sm_120）| 基底 cu121 torch 无 5090 kernel，神经网络上 GPU 报错；升 cu128 让 5090 可训练（§9.9）| `rdagent/scenarios/qlib/docker/Dockerfile`（`# [FORK]` 一行 pip）| **是**（1 行，需重建镜像）|
 
 > 注：上游 `.gitignore` 第 190 行 ignore 了整个 `scripts/`，故 `scripts/setup-hooks.sh` 是
 > **`git add -f` 强制追踪**的（刻意不改上游 `.gitignore`，避免无谓的差异/合并冲突）。
@@ -327,11 +328,11 @@ rdagent server_ui             # Web UI 后端
 除 §5 的 LLM 配置外，跑 fin_model 还需：
 ```bash
 MODEL_CoSTEER_ENV_TYPE=docker     # 模型代码执行走 docker(local_qlib)，否则默认 conda 崩
-QLIB_DOCKER_ENABLE_GPU=False       # 容器 torch 是 cuda12.1，5090(sm_120) 无 kernel；关 GPU 走 CPU
+QLIB_DOCKER_ENABLE_GPU=True        # 镜像已装 cu128 torch(sm_120)，5090 可用（见 §9.9）
 ```
-- **GPU 不匹配（sm_120）**：qlib 镜像基底 `pytorch:2.2.1-cuda12.1`，在 5090 上跑模型训练报
-  `RuntimeError: CUDA error: no kernel image is available`。关 GPU 透传后容器 torch 用 CPU，绕开。
-  想要 GPU 加速需把镜像 torch 换成 cu128+ 的 Blackwell 支持版（未做）。
+- **GPU 已可用**：镜像现装 **torch 2.11.0+cu128**（带 Blackwell/sm_120 kernel），5090 能在容器里
+  训练 PyTorch 模型。详见 §9.9。（历史：原 cu121 torch 无 sm_120 kernel，曾报
+  `CUDA error: no kernel image is available`、被迫关 GPU 走 CPU；现已升级解决。）
 
 ### 9.1 `health_check` 的 embedding 子测试在"分离端点"setup 下会误报失败（不是真问题）
 - 现象：`rdagent health_check` 报 `❌ Embedding test failed: ... 501 This server does not support
@@ -424,6 +425,22 @@ market=all 734 只，benchmark=SPY，**回测期 2021-01~2026-06**，约 5.5 年
 **两份对照**：us_data(标准 dump) 只到 2020-11；要 2021–2026 的近期美股必须用 Massive 自采的 `us_data_massive`。
 两份都说明：引擎+美股全链路可用，但 vanilla Alpha158 非 alpha——真 alpha 要靠 RD-Agent 进化因子/模型
 （其循环现被 China-only bug 挡着，§9.7，需走本驱动或修循环）。
+
+### 9.9 ✅ GPU 镜像：让 5090 在容器里训练 PyTorch 模型（cu128）
+**壁垒**：qlib 镜像基底 `pytorch:2.2.1-cuda12.1` 的 torch 没有 5090（Blackwell, **sm_120 / cc 12.0**）的
+GPU kernel，神经网络（GRU 等）一上 GPU 就报 `CUDA error: no kernel image is available`。LightGBM 是 CPU
+树模型、不受影响。
+**修法（Dockerfile [FORK]）**：升级容器 torch 到 **cu128（CUDA 12.8）的 Blackwell 构建**：
+```dockerfile
+RUN pip install --index-url https://download.pytorch.org/whl/cu128 --upgrade torch
+```
+- torch wheel **自带 cu128 runtime**，覆盖基底的 cu121；**主机 CUDA-13.2 toolkit 与容器无关**，只需主机
+  **驱动**够新（610.47 够）。
+- 实测（2026-06-14，本镜像内 `--gpus all`）：`torch 2.11.0+cu128`、`sm_120 ∈ archs`、`cuda available: True`、
+  `RTX 5090`、GPU matmul + **GRU 前向**均 OK。镜像 16.5GB→**29.6GB**。
+- cu128 是**这台机器已验证可用**的 Blackwell torch（`~/vllm-venv` 的 2.11.0+cu128 也列 sm_120）。
+- 启用：`.env` `QLIB_DOCKER_ENABLE_GPU=True`（RD-Agent 自己的 run）；custom 驱动用 `--gpu`（加 `--gpus all`）。
+- ⚠️ OpenWhisper 在 Windows 侧共用这张卡(~10GB)，但小 NN 占显存少，够用。
 
 ### 9.6 fin_model 的数据加载报错链（已排查，根因见 §9.7）
 现状：fin_model 前面全通（提案→granite8b 编码 GRU→docker 验证"Execution successful"→qrun 启动、

@@ -74,10 +74,17 @@ class BacktestResult:
         return self.exit_code == 0 and bool(self.metrics)
 
 
-def _docker_cmd(config: str, workspace: Path | None, env: dict[str, str]) -> list[str]:
+def _docker_cmd(config: str, workspace: Path | None, env: dict[str, str], gpu: bool = False) -> list[str]:
     """Build the ``docker run`` argv. List form (no shell) keeps ``$close`` etc. in
-    feature expressions intact — passing them through a shell would eat the ``$``."""
-    cmd = ["docker", "run", "--rm", "-v", f"{QLIB_HOME}:/root/.qlib"]
+    feature expressions intact — passing them through a shell would eat the ``$``.
+
+    gpu=True adds ``--gpus all`` so PyTorch models (e.g. qlib's GRU) train on the
+    RTX 5090. Requires the image to carry a Blackwell-capable torch (cu128; the qlib
+    Dockerfile installs it — see FORK.md §9.9). LightGBM/CPU runs don't need this."""
+    cmd = ["docker", "run", "--rm"]
+    if gpu:
+        cmd += ["--gpus", "all"]
+    cmd += ["-v", f"{QLIB_HOME}:/root/.qlib"]
     if workspace is not None:
         cmd += ["-v", f"{workspace.resolve()}:/ws", "-w", "/ws"]
     else:
@@ -122,7 +129,8 @@ def run_backtest(
     config: str,
     workspace: str | Path | None = None,
     env: dict[str, str] | None = None,
-    timeout: int = 3600,
+    timeout: int = 7200,
+    gpu: bool = False,
 ) -> BacktestResult:
     """Run ``qrun <config>`` in the local_qlib container on US data and parse metrics.
 
@@ -130,13 +138,15 @@ def run_backtest(
                relative to ``workspace`` (mode 2).
     workspace: optional host dir to mount at ``/ws`` (RD-Agent model workspace).
     env:       extra container env (Jinja context for rendered RD-Agent configs).
+    gpu:       pass ``--gpus all`` so PyTorch models train on the RTX 5090 (needs the
+               cu128 torch baked into the image). Leave False for LightGBM/CPU configs.
     """
     run_env = {"MLFLOW_ALLOW_FILE_STORE": "true", "PYTHONPATH": "./"}
     if env:
         run_env.update({k: str(v) for k, v in env.items()})
     ws = Path(workspace) if workspace is not None else None
     proc = subprocess.run(
-        _docker_cmd(config, ws, run_env),
+        _docker_cmd(config, ws, run_env, gpu=gpu),
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -172,11 +182,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--config", required=True, help="qrun workflow YAML (in-image path or workspace-relative).")
     p.add_argument("--workspace", default=None, help="Host model-workspace dir to mount (RD-Agent generated).")
     p.add_argument("--env-json", default=None, help="JSON dict of extra container env (Jinja context).")
+    p.add_argument("--gpu", action="store_true", help="Pass --gpus all (PyTorch models on the RTX 5090; needs cu128 image).")
     p.add_argument("--json", action="store_true", help="Print parsed metrics as JSON.")
     args = p.parse_args(argv)
 
     env = json.loads(args.env_json) if args.env_json else None
-    result = run_backtest(config=args.config, workspace=args.workspace, env=env)
+    result = run_backtest(config=args.config, workspace=args.workspace, env=env, gpu=args.gpu)
     if args.json:
         print(json.dumps({"exit_code": result.exit_code, "metrics": result.metrics}, indent=2))
     else:
