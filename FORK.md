@@ -316,8 +316,19 @@ rdagent server_ui             # Web UI 后端
 
 ## 9. 本地运行的已知问题与经验
 
-> 实测记录。2026-06-14：环境配置 + LLM 双端点已跑通（chat+embedding via rdagent APIBackend），
-> **但尚未实跑任何完整场景**（fin_factor / data_science 等），下面是配置阶段踩的坑。
+> 实测记录。2026-06-14：环境配置 + LLM 双端点已跑通；**fin_model 美股循环已跑到 qlib 回测的
+> 数据加载阶段**（提案→编码→docker 验证→qrun 启动全通），仅剩一个 qlib 配置/版本问题（见 §9.6）。
+> fin_factor 被 conda 硬编码挡住（§9.5）。下面是逐项踩的坑。
+
+### 9.0 跑 qlib 场景需要的本地配置（`.env`，已 gitignore）
+除 §5 的 LLM 配置外，跑 fin_model 还需：
+```bash
+MODEL_CoSTEER_ENV_TYPE=docker     # 模型代码执行走 docker(local_qlib)，否则默认 conda 崩
+QLIB_DOCKER_ENABLE_GPU=False       # 容器 torch 是 cuda12.1，5090(sm_120) 无 kernel；关 GPU 走 CPU
+```
+- **GPU 不匹配（sm_120）**：qlib 镜像基底 `pytorch:2.2.1-cuda12.1`，在 5090 上跑模型训练报
+  `RuntimeError: CUDA error: no kernel image is available`。关 GPU 透传后容器 torch 用 CPU，绕开。
+  想要 GPU 加速需把镜像 torch 换成 cu128+ 的 Blackwell 支持版（未做）。
 
 ### 9.1 `health_check` 的 embedding 子测试在"分离端点"setup 下会误报失败（不是真问题）
 - 现象：`rdagent health_check` 报 `❌ Embedding test failed: ... 501 This server does not support
@@ -355,11 +366,29 @@ rdagent server_ui             # Web UI 后端
   并降质（日志报 `model default pooling_type is [3], but [1] was specified`）。不传 `--pooling` 即用默认。
 - embedding 对量化敏感 → 用 **F16**（1.2GB，显存现在不缺）；要更省可换 Q8_0(639MB)。
 
+### 9.5c fin_factor 被 conda 硬编码挡住（暂缓）
+- `rdagent/components/coder/factor_coder/config.py:get_factor_env()` **写死** `LocalEnv(CondaConf(...))`，
+  无 docker 分支，`CONDA_DEFAULT_ENV=None`（我们用 uv venv）→ 场景构造即崩。且因子源数据
+  `git_ignore_folder/factor_implementation_source_data` 也不存在。→ 暂用 **fin_model**（不调 get_factor_env）。
+
+### 9.6 ⚠️ fin_model 最后一道坎：qlib 回测的数据加载报错（未解决）
+现状：fin_model 前面全通（提案→granite8b 编码 GRU→docker 验证"Execution successful"→qrun 启动、
+US Alpha158 特征、CPU 训练），但 qlib **数据 handler `setup_data` 阶段**报：
+```
+ValueError: instrument: {'__DEFAULT_FREQ': '/root/.qlib/qlib_data/us_data'} does not contain data for day
+```
+- 排除项：容器 qlib **能正常读 us_data**（单标的 AAPL $close ✅、sp500 池 724 标的 ✅、日历 ✅）。
+- 失败的是 **RD-Agent 生成的 handler 配置**（`conf_baseline_factors_model.yaml`：NestedDataLoader +
+  Alpha158DL + 自定义 20 特征 + `Ref($close,-2)` label），错误里 `instrument: {freq dict}` 是**畸形参数**。
+- **最可能根因**：qlib 镜像 `Dockerfile` 把 qlib **固定在老 commit `2fb9380b`**，与 RD-Agent 模板面向的
+  **新版 qlib 配置格式不匹配**。
+- **候选修法（未做，待定）**：(a) 把 Dockerfile 的 qlib 换成更新的版本，或**直接用姊妹 fork
+  `ybwbqg9379/qlib`**（它本就能读这份 us_data）——一举连上我们的 qlib fork；(b) 调 RD-Agent 模板的
+  handler 配置适配老 qlib。倾向 (a)。
+
 ### 9.5 还没验证、预期可能遇到的（跑场景时填）
-- **本地模型上下文撑爆**：某些场景把大量数据塞进 prompt → 换 `gemma-moe`(256K) 或缩数据
-  （参照 TradingAgents：基本面全量数据曾撑爆 qwen 96K）。注意还要给 embedding 留显存。
+- **本地模型上下文撑爆**：某些场景把大量数据塞进 prompt → 换 `gemma-moe`(256K) 或缩数据。
 - **structured-output / function-calling 偏弱**：本地模型弱于商业模型，留意框架是否优雅降级。
-- **Docker 坑**：镜像构建、GPU 透传、卷挂载、超时。
 - **thinking 模型 `max_tokens`**：给太小会被思维链吃光，`content` 为空（qwen 是 thinking 模型）。
 
 ---
