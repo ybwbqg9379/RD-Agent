@@ -7,7 +7,7 @@
 > **读者**：未来的我，以及任何进入本仓库的 agent（Claude Code / Codex 等）。
 > **维护**：每次新增/修改定制，或同步一次上游，都要回来更新对应章节 + 底部"最后更新"。
 >
-> **最后更新**：2026-06-14（文档骨架初版）
+> **最后更新**：2026-06-14（文档骨架 + 本地环境配置实测跑通；见 §5/§9）
 
 ---
 
@@ -175,44 +175,68 @@ git push origin main
 > RD-Agent **大多数场景依赖 Docker**（LLM 生成的代码在容器里跑）。确保 `docker run hello-world`
 > 无需 sudo 可跑通（见上游 README "Quick start"）。LLM 推理本身走本机 llama.cpp，与 Docker 无关。
 
-### 5.1 安装
+> ✅ **以下配置 2026-06-14 已实测跑通**（uv 3.11 venv + chat/embedding 双 llama.cpp + Docker）。
+> rdagent `APIBackend` 端到端验证：chat 返回正常、embedding 返回 1024 维向量。
+
+### 5.1 安装（实测：用 uv 建 3.11 venv，别用系统 3.12）
+上游 CI 只测 Python **3.10/3.11**（`constraints/3.11.txt` 在仓库里）；本机系统 Python 是 3.12，
+**不要**直接用。用 uv 建隔离 venv：
 ```bash
-# 仓库根目录（上游用 conda + make dev；也可用 uv/pip）
-make dev                     # 或：pip install -e .
-./scripts/setup-hooks.sh     # 启用 commit 门禁（见 §3.3），每个 clone 一次
-rdagent health_check         # 自检（Docker 等）
+uv venv --python 3.11 .venv                                   # 建 3.11 venv
+uv pip install --python .venv/bin/python -e '.[lint,test]' -c constraints/3.11.txt
+# 注：uv venv 默认不含 pip，别再 `python -m pip ...`，全程用 `uv pip`。
+# 跑 rdagent 用 .venv/bin/rdagent（或 source .venv/bin/activate）。
+./scripts/setup-hooks.sh                                       # 启用 commit 门禁（每 clone 一次）
+```
+> `make dev` 也行（装 docs,lint,package,test 全量），但它假设 conda/pipenv 环境；本机没 conda，
+> 上面的 uv 路线更省、更可控。`[lint,test]` 足够跑 CLI + `pytest -m offline` + lint。
+
+### 5.2 指向本机 llama.cpp —— chat + embedding 双 server（不花 API 钱）
+RD-Agent 默认后端是 **LiteLLM**（`rdagent.oai.backend.LiteLLMAPIBackend`）。它**需要 chat
+和 embedding 两个模型**（embedding 用于知识库/RAG；`health_check` 第一步就测 embedding）。
+本机没有 embedding 模型，故采"全本地 embedding"：**起两个 llama.cpp，端口错开**。
+
+**(1) embedding server @ 8081**（已下 `Qwen3-Embedding-0.6B-Q8_0.gguf` 到 `~/models/gguf/`）：
+```bash
+~/llama.cpp/build/bin/llama-server \
+  --model ~/models/gguf/Qwen3-Embedding-0.6B/Qwen3-Embedding-0.6B-Q8_0.gguf \
+  --host 0.0.0.0 --port 8081 \
+  --embeddings --pooling last \
+  -ngl 999 -c 2048 -ub 2048 -b 2048 --no-warmup
+# ⚠️ batch 必须压小！用默认/过大的 -ub -b（如 8192）会让 0.6B 的 compute buffer 吃到 ~9GB，
+#    和 chat 一起必爆。-ub 2048 时只占 ~2.6GB。
 ```
 
-### 5.2 指向本机 llama.cpp（不花 API 钱）
-先按 `~/CLAUDE.md` 启动本地模型，例如：
+**(2) chat server @ 8080**（上下文下调到 32K 给 embedding 腾显存）：
 ```bash
-~/start-llamacpp.sh qwen     # Qwen3.6-27B，服务在 http://localhost:8080
+CTX=32768 ~/start-llamacpp.sh qwen      # qwen 满 96K 用 ~29GB，和 embedding 共存会爆；32K 才放得下
 ```
 
-RD-Agent 默认后端是 **LiteLLM**（`rdagent.oai.backend.LiteLLMAPIBackend`），用 LiteLLM 的
-`openai/<model>` 写法即可路由到任意 OpenAI 兼容端点。复制 `.env`（如上游有 `.env.example`
-则照抄）关键几行：
+**(3) `.env`**（仓库根，已 gitignore；chat 走 `openai/`+8080，embedding 走 `litellm_proxy/`+8081）：
 ```bash
-# 用 LiteLLM 的 OpenAI 兼容路径指向本地 llama.cpp
+BACKEND=rdagent.oai.backend.LiteLLMAPIBackend
 CHAT_MODEL=openai/qwen
-EMBEDDING_MODEL=openai/qwen        # 若本地不跑 embedding，可改用别的小模型/远端
 OPENAI_API_BASE=http://localhost:8080/v1
-OPENAI_API_KEY=sk-local-dummy      # 本地服务不校验 key，填占位即可
+OPENAI_API_KEY=sk-local-dummy
+EMBEDDING_MODEL=litellm_proxy/qwen3-embedding
+LITELLM_PROXY_API_BASE=http://localhost:8081/v1
+LITELLM_PROXY_API_KEY=sk-local-dummy
+USE_CHAT_CACHE=True
+USE_EMBEDDING_CACHE=True
 ```
-> ⚠️ **未实测**：上面是按 RD-Agent LiteLLM 后端的标准写法给的骨架，**首次实跑前请核对**
-> `rdagent/oai/llm_conf.py`（`LLMSettings` 字段：`chat_model` / `openai_api_base` /
-> `chat_openai_base_url` 等）与 `rdagent/oai/backend/litellm.py`（`LiteLLMSettings`
-> `env_prefix = "LITELLM_"`——部分字段可能需要 `LITELLM_` 前缀）。实跑结论记到 §9。
+> **为什么 embedding 用 `litellm_proxy/` 前缀**：litellm 的 `openai/` provider 只认全局
+> `OPENAI_API_BASE`（=8080），无法给 embedding 单独指端点；`litellm_proxy/` 会读
+> `LITELLM_PROXY_API_BASE`（=8081），这样 chat/embedding 各走各的 server。实测 OK。
 
-> **显存约束（见 `~/CLAUDE.md`）**：32GB 单卡同一时刻只能跑一个模型。RD-Agent 的
-> proposal/coder/runner 都用同一个 chat 模型即可；embedding 若也要本地，要么复用同一模型、
-> 要么接受换模型的显存切换成本。
+**显存账（实测，32GB 单卡）**：embedding(-ub 2048) ~2.6GB + qwen@32K ~24GB + 基线 ~2GB
+≈ **28.4GB / 32GB**，余 ~4GB，两 server 稳定共存。要更大 chat 上下文就得再砍 embedding 或换更小 chat。
 
-### 5.3 选哪个本地模型
+### 5.3 选哪个本地 chat 模型
 RD-Agent 的 coder/proposal 提示词长、且要可靠的代码/结构化输出：
-- **写代码/Agent 主力**：`qwen`（Qwen3.6-27B，96K）。
-- **场景把大量数据/长上下文塞进 prompt 时**：换 `gemma-moe`（256K）。
-- 具体阈值/坑实跑后记到 §9（参照 TradingAgents 的经验：基本面全量数据曾撑爆 qwen 的 96K）。
+- **写代码/Agent 主力**：`qwen`（Qwen3.6-27B）。注意和 embedding 共存时 chat 上下文要降到 ~32K。
+- **场景把大量数据/长上下文塞进 prompt 时**：换 `gemma-moe`（256K，但同样要给 embedding 留显存）。
+- embedding 固定用 `Qwen3-Embedding-0.6B`（1024 维），换 chat 模型不影响它。
+- 各场景的真实上下文峰值/坑实跑后记到 §9。
 
 ### 5.4 运行一个场景
 ```bash
@@ -253,12 +277,16 @@ rdagent server_ui             # Web UI 后端
 ## 7. 冒烟测试（同步上游后/改动后跑一遍）
 
 ```bash
-# 上游 CI 跑的离线测试（不需要 Docker / API key）
-make lint
-make test-offline            # 或：pytest -m offline -q
-rdagent health_check         # Docker / 环境自检
+# 上游 CI 跑的离线测试（不需要 Docker / API key）—— 用 venv 里的工具
+.venv/bin/pytest -m offline -q          # 或 make test-offline（需 conda/pipenv）
+.venv/bin/ruff check rdagent/core
 
-# 端到端最小验证（需 Docker + 本地模型）：跑一个最便宜的场景确认没被上游改动弄坏
+# 环境自检：先起两个 llama.cpp（见 §5.2），再
+.venv/bin/rdagent health_check
+#   ⚠️ embedding 子测试会误报红叉（health_check 的 bug，见 §9.1）；chat/Docker/端口绿即可。
+#   真要确认 embedding 通：curl http://localhost:8081/v1/embeddings（见 §9.1）。
+
+# 端到端最小验证（需 Docker + 双 server）：跑一个最便宜的场景确认没被上游改动弄坏
 # 例如最少迭代数的 fin_factor / data_science（具体命令实跑后补到 §9）
 ```
 
@@ -277,13 +305,41 @@ rdagent health_check         # Docker / 环境自检
 
 ## 9. 本地运行的已知问题与经验
 
-> 实测记录（首次端到端跑通后填）。当前为空——文档骨架尚未实跑。
->
-> 参照 TradingAgents 的经验区，预期会遇到的几类：
-> - **本地模型上下文撑爆**：某些场景把大量数据塞进 prompt → 选大上下文模型（`gemma-moe` 256K）或缩数据。
-> - **structured-output / function-calling 偏弱**：本地模型对结构化输出支持弱于商业模型，留意框架是否优雅降级。
-> - **Docker 相关坑**：镜像构建、GPU 透传、卷挂载、超时。
-> - **thinking 模型 `max_tokens`**：给太小会被思维链吃光，`content` 为空。
+> 实测记录。2026-06-14：环境配置 + LLM 双端点已跑通（chat+embedding via rdagent APIBackend），
+> **但尚未实跑任何完整场景**（fin_factor / data_science 等），下面是配置阶段踩的坑。
+
+### 9.1 `health_check` 的 embedding 子测试在"分离端点"setup 下会误报失败（不是真问题）
+- 现象：`rdagent health_check` 报 `❌ Embedding test failed: ... 501 This server does not support
+  embeddings`，但 chat ✅ / Docker ✅ / 端口 ✅。
+- 根因：`rdagent/app/utils/health_check.py:env_check()` 在 `OPENAI_API_KEY` 分支里**硬把
+  `embedding_api_base = chat_api_base`**（只有 DeepSeek 分支才读 `LITELLM_PROXY_API_BASE`）。
+  于是它把 embedding 请求发到了 chat server(8080)，而 8080 没开 `--embeddings` → 501。
+- **真实运行路径不受影响**：默认 LiteLLM 后端 `_create_embedding_inner_function` 调
+  `embedding(model=..., input=...)` **不传 api_base**，由 litellm 按 `litellm_proxy/` 前缀读
+  `LITELLM_PROXY_API_BASE`(=8081) 正确路由。已用 `APIBackend().create_embedding([...])` 实测返回 1024 维向量。
+- 结论：**health_check 的 embedding 红叉可忽略**；要确认 embedding 真的通，用：
+  ```bash
+  curl -s http://localhost:8081/v1/embeddings -H "Content-Type: application/json" \
+    -d '{"input":"hi","model":"qwen3-embedding"}' | head -c 80
+  ```
+
+### 9.2 embedding server 的 batch 必须压小，否则显存爆
+- `--ub/-b 8192` 会让 Qwen3-Embedding-0.6B 的 compute buffer 膨胀到 **~9GB**（0.6B 模型！），
+  和 chat 一起必 OOM。`-ub 2048 -b 2048` 时只占 ~2.6GB。见 §5.2。
+
+### 9.3 chat 上下文要为 embedding 让显存
+- qwen 满 96K ≈ 29GB，加 embedding ~2.6GB 超 32GB。chat 用 `CTX=32768` 起，总占 ~28.4GB，稳。
+
+### 9.4 装环境的坑
+- 系统只有 Python 3.12（上游 CI 只测 3.10/3.11）→ 用 `uv venv --python 3.11`。
+- `uv venv` 默认**不装 pip**，别 `python -m pip`（会 `No module named pip`），全程 `uv pip`。
+
+### 9.5 还没验证、预期可能遇到的（跑场景时填）
+- **本地模型上下文撑爆**：某些场景把大量数据塞进 prompt → 换 `gemma-moe`(256K) 或缩数据
+  （参照 TradingAgents：基本面全量数据曾撑爆 qwen 96K）。注意还要给 embedding 留显存。
+- **structured-output / function-calling 偏弱**：本地模型弱于商业模型，留意框架是否优雅降级。
+- **Docker 坑**：镜像构建、GPU 透传、卷挂载、超时。
+- **thinking 模型 `max_tokens`**：给太小会被思维链吃光，`content` 为空（qwen 是 thinking 模型）。
 
 ---
 
@@ -295,5 +351,5 @@ rdagent health_check         # Docker / 环境自检
 | 阶段 | 内容 | 状态 | 验收标准 |
 |---|---|---|---|
 | 0 文档骨架 | FORK.md / CLAUDE.md / commit 门禁 | ☑ 完成 | 文档就位、门禁可启用 |
-| 1 本地跑通 | 用 llama.cpp 跑通至少一个场景，沉淀 §5/§9 经验 | ☐ 未开始 | 一个场景端到端出结果，env 配置实测确认 |
+| 1 本地跑通 | 用 llama.cpp 跑通至少一个场景，沉淀 §5/§9 经验 | ◐ 进行中 | **env 已配好并实测**（uv 3.11 venv + chat/emb 双 server + Docker，rdagent APIBackend 端到端通，见 §5/§9）；**待办 = 实跑一个完整场景**（fin_factor/data_science 最小迭代） |
 | 2 待定 | 我们自己的能力（视用途定） | ☐ 未规划 | — |
