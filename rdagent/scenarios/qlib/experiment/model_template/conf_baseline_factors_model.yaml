@@ -1,8 +1,8 @@
 qlib_init:
-    provider_uri: "~/.qlib/qlib_data/cn_data"
-    region: cn
-market: &market csi300
-benchmark: &benchmark SH000300
+    provider_uri: "~/.qlib/qlib_data/us_data"  # [FORK] US market (us_data/sp500/^GSPC); see FORK.md §6
+    region: us  # [FORK] US market (us_data/sp500/^GSPC); see FORK.md §6
+market: &market sp500  # [FORK] US market (us_data/sp500/^GSPC); see FORK.md §6
+benchmark: &benchmark ^GSPC  # [FORK] US market (us_data/sp500/^GSPC); see FORK.md §6
 
 data_handler_config: &data_handler_config
     start_time: {{ train_start | default("2008-01-01", true) }}
