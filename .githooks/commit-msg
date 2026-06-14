@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# [FORK] commit-msg gate — enforces Conventional Commits + this fork's "Fork:" trailer.
+#
+# This is a LOCAL (non-CI) gate. It is version-controlled under .githooks/ and
+# activated per-clone via:  git config core.hooksPath .githooks
+# (run scripts/setup-hooks.sh once, or see FORK.md §3).
+#
+# Anyone / any agent committing in this repo whose message does not conform is
+# rejected. Emergency bypass (discouraged): git commit --no-verify
+
+msg_file="$1"
+
+# Subject = first non-empty, non-comment line of the commit message.
+subject="$(grep -vE '^[[:space:]]*#' "$msg_file" 2>/dev/null | sed '/^[[:space:]]*$/d' | head -n1)"
+
+# Skip auto-generated / non-authored messages: merges (which is how upstream
+# commits arrive), reverts created by `git revert`, and rebase autosquash stubs.
+case "$subject" in
+  "Merge "*|"Revert "*|"fixup! "*|"squash! "*|"amend! "*) exit 0 ;;
+esac
+
+fail() {
+  {
+    echo ""
+    echo "  ✖ commit-msg rejected: $1"
+    echo ""
+    echo "  Required format (Conventional Commits):"
+    echo "    <type>(<scope>): <description>"
+    echo "      type  = feat | fix | docs | refactor | perf | test | build | ci | chore | revert"
+    echo "      scope = lower-case subsystem, e.g. core | oai | scenarios | components | app | qlib | data_science | docker | fork"
+    echo ""
+    echo "  This fork ALSO requires a trailer marking the commit as our own change:"
+    echo "    Fork: <one-line reason>"
+    echo ""
+    echo "  Example:"
+    echo "    feat(scenarios): add A-share factor scenario"
+    echo ""
+    echo "    Fork: upstream qlib scenario has no A-share factor source"
+    echo ""
+    echo "  See FORK.md §3.  Emergency bypass (discouraged): git commit --no-verify"
+    echo ""
+  } >&2
+  exit 1
+}
+
+# 1) Subject must follow Conventional Commits.
+re='^(feat|fix|docs|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9_.-]+\))?!?: .+'
+if ! printf '%s' "$subject" | grep -qE "$re"; then
+  fail "subject does not match '<type>(<scope>): <description>'  → got: '${subject:-<empty>}'"
+fi
+
+# 2) Subject length sanity (Conventional Commits recommends <=72; hard cap 100).
+if [ "${#subject}" -gt 100 ]; then
+  fail "subject too long (${#subject} chars > 100)"
+fi
+
+# 3) Fork marker: every commit WE author must carry a 'Fork:' trailer. This is
+#    what keeps our changes greppable (git log --grep '^Fork:') and visibly
+#    distinct from merged-in upstream history.
+if ! grep -qiE '^Fork:[[:space:]]*[^[:space:]]' "$msg_file"; then
+  fail "missing 'Fork: <reason>' trailer (marks the commit as this fork's own change)"
+fi
+
+exit 0
