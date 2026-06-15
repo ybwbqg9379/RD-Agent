@@ -290,6 +290,8 @@ rdagent server_ui             # Web UI 后端
 | 2026-06-14 | qlib 镜像改用姊妹 fork `ybwbqg9379/qlib`（替代上游固定老 commit）| 连上我们的 qlib fork + 用能读 us_data 的较新 qlib | `rdagent/scenarios/qlib/docker/Dockerfile`（`# [FORK]`）| **是**（1 行 clone URL）|
 | 2026-06-14 | 新增 `rdagent/custom/` 私有包 + 美股回测薄驱动 | RD-Agent 的 fin_* 循环有 China-only/docker-SDK bug（§9.7）；薄驱动绕过它、直接 qrun 出美股回测 | `rdagent/custom/__init__.py`、`rdagent/custom/us_qlib_backtest.py`（均新增；后者支持 `--gpu`）| 否（纯新增私有目录）|
 | 2026-06-14 | qlib 镜像升级 torch 到 cu128（Blackwell/sm_120）| 基底 cu121 torch 无 5090 kernel，神经网络上 GPU 报错；升 cu128 让 5090 可训练（§9.9）| `rdagent/scenarios/qlib/docker/Dockerfile`（`# [FORK]` 一行 pip）| **是**（1 行，需重建镜像）|
+| 2026-06-14 | 薄驱动加 `--qlib-src`：把本地 qlib 仓库挂进容器覆盖镜像内 clone（免 push+重建镜像即生效）| 缩短 qlib→RD-Agent 开发回环；自动叠回镜像编译的 cython `_libs` 解决主机 3.12 vs 容器 3.10 的 `.so` ABI 不兼容 | `rdagent/custom/us_qlib_backtest.py`（新增 `--qlib-src` / `_ensure_libs_cache`）| 否（纯新增私有目录）|
+| 2026-06-14 | 新增 `signals.parquet` 跨仓库契约 + 导出器（RD-Agent/qlib 预测 → TradingAgents 消费）| 三仓库靠产物契约联动而非 import；schema v1 长表 `date/ticker/score` + `.meta.json` provenance | `rdagent/custom/export_signals.py`、`test/custom/test_export_signals.py`（均新增）；契约图见 `~/AI-STACK.md` §7 | 否（纯新增私有目录）|
 
 > 注：上游 `.gitignore` 第 190 行 ignore 了整个 `scripts/`，故 `scripts/setup-hooks.sh` 是
 > **`git add -f` 强制追踪**的（刻意不改上游 `.gitignore`，避免无谓的差异/合并冲突）。
