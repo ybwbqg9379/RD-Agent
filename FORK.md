@@ -497,5 +497,6 @@ ValueError: instrument: {'__DEFAULT_FREQ': '/root/.qlib/qlib_data/us_data'} does
 | 0 文档骨架 | FORK.md / CLAUDE.md / commit 门禁 | ☑ 完成 | 文档就位、门禁可启用 |
 | 1 本地跑通 | 用 llama.cpp 跑通至少一个场景，沉淀 §5/§9 经验 | ☑ 完成 | env 实测通；RD-Agent 机器在美股上 提案→编码→训练 全跑通（仅其 fin_* 循环包装层有 China-only/SDK bug，§9.7）；**绕过它已出首个美股回测结果**（§9.8，`rdagent/custom/us_qlib_backtest.py`） |
 | 2 美股评测驱动 | `rdagent/custom/` 薄驱动绕过 RD-Agent 循环、直接 qrun 出美股回测 | ☑ 完成 | LightGBM/Alpha158（§9.8）+ **RD-Agent 生成的 GRU**（§9.8 第三份）都出真实指标 |
-| 3 GPU 加速 | 让 5090 在容器里训 PyTorch 模型（cu128/sm_120）| ☑ 完成 | §9.9；GRU 训练提速 ~45×；含成本 +1.31% 跑赢基线 |
-| 4 待定 | 修 RD-Agent 循环 / 给上游提 issue / 更强模型(qwen)进化因子模型看真 alpha | ☐ 未规划 | — |
+| 3 GPU 加速 | 让 5090 在容器里训 PyTorch 模型（cu128/sm_120）| ☑ 完成 | §9.9；GRU 训练提速 ~45×（~15 秒/epoch） |
+| 3.1 死锁根治 | DataLoader worker 容器内死锁 → 在姊妹 qlib fork 加 `persistent_workers`（commit `51ba755a`）| ☑ 完成 | §9.9；n_jobs=20 既快又稳、无死锁；惠及所有容器化 qlib NN 训练 |
+| 4 待定 | 修/绕 RD-Agent 循环 + 用更强模型(qwen)多轮进化因子模型**找稳健 alpha** | ☐ 未规划 | 注：vanilla Alpha158 与单轮 GRU 都还不是 alpha（run-to-run 噪声大，§9.8）；真 alpha 要多轮进化 |
