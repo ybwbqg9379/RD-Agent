@@ -432,9 +432,10 @@ granite8b 生成的 `GRU_TimeSeries_Model`（2 层 GRU），在 5090 上训 17 e
 | 信息比率 | 0.596 | 0.552 | 0.124 |
 | 最大回撤 | −38.25% | −15.55% | **−19.98%** |
 
-信号 IC=0.0062。**GRU 比同期 LightGBM 明显更好**：含成本超额 **+1.31%**（vs LightGBM −1.94%）、回撤 −19.98%
-（vs −26.38%）——一个小但实打实的**正超额**。**证明 RD-Agent 的核心循环（LLM 自动生成模型）在美股有真实价值**：
-LLM 生成 → GPU 训练 → 美股回测整条链路通，且生成的模型真的跑赢了基线。
+信号 IC=0.0062。这一轮含成本超额 **+1.31%**（vs LightGBM −1.94%）、回撤 −19.98%。**但⚠️ run-to-run 噪声很大**：
+同一 GRU/数据换随机种子重训，另一轮含成本超额是 **−1.90%**（IC 0.0032）。**所以 +1.31% 不是稳健 alpha，只是随机波动**
+（与 IC 极弱一致）。真正证明的是**整条链路在美股可用**：LLM 生成 → GPU 训练 → 美股回测全通；要稳健 alpha 仍需
+RD-Agent 多轮进化更好的因子/模型（vanilla Alpha158 + 单个 LLM 生成 GRU 都还不是 alpha）。
 
 **三份对照**：us_data(标准 dump) 只到 2020-11；要 2021–2026 的近期美股必须用 Massive 自采的 `us_data_massive`。
 引擎+美股全链路可用；vanilla Alpha158(LightGBM) 非 alpha，但 RD-Agent 生成的 GRU 已出正超额——真 alpha 要靠
@@ -460,9 +461,11 @@ RUN pip install --index-url https://download.pytorch.org/whl/cu128 --upgrade tor
 **跑 PyTorch 模型时的两个容器坑（驱动已处理 / 需注意）：**
 - **`--shm-size`**：PyTorch DataLoader 多 worker 用 `/dev/shm` 传张量，Docker 默认 64MB 会
   `unable to allocate shared memory`。驱动 `us_qlib_backtest.py` 已固定加 `--shm-size=16g`（同 RD-Agent QlibDockerConf）。
-- **⚠️ `n_jobs` 必须设 0**：qlib `GeneralPTNN` 的 conf `n_jobs: 20`（DataLoader worker 数）在容器里
-  **会在验证阶段 DataLoader worker 死锁**（即使 shm 够也卡死，进程全 0% CPU）。喂 RD-Agent 工作区前，把
-  其 `conf_*.yaml` 的 `n_jobs: 20` 改成 `n_jobs: 0`（DataLoader 主进程加载，不开子进程）。改完即顺畅训完。
+- **DataLoader worker 死锁（已根治）**：qlib `GeneralPTNN` 原本每 epoch 重 fork `n_jobs` 个 DataLoader
+  worker，在容器里**验证阶段间歇性死锁**（fork-after-threads + qlib mmap 数据；进程全 0% CPU，即使 shm 够）。
+  **根因 + 修法见姊妹 qlib fork 的 commit `51ba755a`**：给三个 DataLoader 加 `persistent_workers=self.n_jobs>0`
+  （worker 只 fork 一次、跨 epoch 复用，消除每 epoch 重 fork 的竞态）。**实测（含此补丁的镜像）n_jobs=20
+  顺畅训完、~15 秒/epoch、无死锁** —— 既快又稳，不必再设 0。（注：旧镜像/未打补丁时仍需 `n_jobs: 0` 兜底。）
 
 ### 9.6 fin_model 的数据加载报错链（已排查，根因见 §9.7）
 现状：fin_model 前面全通（提案→granite8b 编码 GRU→docker 验证"Execution successful"→qrun 启动、
