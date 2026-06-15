@@ -81,7 +81,9 @@ def _docker_cmd(config: str, workspace: Path | None, env: dict[str, str], gpu: b
     gpu=True adds ``--gpus all`` so PyTorch models (e.g. qlib's GRU) train on the
     RTX 5090. Requires the image to carry a Blackwell-capable torch (cu128; the qlib
     Dockerfile installs it — see FORK.md §9.9). LightGBM/CPU runs don't need this."""
-    cmd = ["docker", "run", "--rm"]
+    # --shm-size: PyTorch DataLoader workers pass tensors via /dev/shm; Docker's default
+    # 64MB overflows ("unable to allocate shared memory"). RD-Agent's QlibDockerConf uses 16g.
+    cmd = ["docker", "run", "--rm", "--shm-size=16g"]
     if gpu:
         cmd += ["--gpus", "all"]
     cmd += ["-v", f"{QLIB_HOME}:/root/.qlib"]

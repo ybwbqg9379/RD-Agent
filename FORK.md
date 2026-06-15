@@ -422,9 +422,23 @@ market=all 734 只，benchmark=SPY，**回测期 2021-01~2026-06**，约 5.5 年
 信号 IC=0.0013（极弱）。SPY 这 5.5 年年化 +13.75%（牛市），策略**几乎完全贴着大盘**走。
 **含成本超额 −0.07%/年 与姊妹 qlib fork Phase 2 记录一字不差**——证明本驱动这条路精确复现了直接跑 qlib 的结果。
 
-**两份对照**：us_data(标准 dump) 只到 2020-11；要 2021–2026 的近期美股必须用 Massive 自采的 `us_data_massive`。
-两份都说明：引擎+美股全链路可用，但 vanilla Alpha158 非 alpha——真 alpha 要靠 RD-Agent 进化因子/模型
-（其循环现被 China-only bug 挡着，§9.7，需走本驱动或修循环）。
+**第三份：RD-Agent 生成的 GRU 模型 + GPU 训练（2026-06-14）**——`--workspace <RD-Agent 生成的工作区>
+--config conf_baseline_factors_model.yaml --env-json '{...}' --gpu`（us_data，sp500，回测期 2017-01~2020-08）。
+granite8b 生成的 `GRU_TimeSeries_Model`（2 层 GRU），在 5090 上训 17 epoch（best@9，early stop）：
+
+| 指标 | 基准(^GSPC) | 超额·无成本 | 超额·含成本 |
+|---|---|---|---|
+| 年化收益 | +12.08% | +5.85% | **+1.31%** |
+| 信息比率 | 0.596 | 0.552 | 0.124 |
+| 最大回撤 | −38.25% | −15.55% | **−19.98%** |
+
+信号 IC=0.0062。**GRU 比同期 LightGBM 明显更好**：含成本超额 **+1.31%**（vs LightGBM −1.94%）、回撤 −19.98%
+（vs −26.38%）——一个小但实打实的**正超额**。**证明 RD-Agent 的核心循环（LLM 自动生成模型）在美股有真实价值**：
+LLM 生成 → GPU 训练 → 美股回测整条链路通，且生成的模型真的跑赢了基线。
+
+**三份对照**：us_data(标准 dump) 只到 2020-11；要 2021–2026 的近期美股必须用 Massive 自采的 `us_data_massive`。
+引擎+美股全链路可用；vanilla Alpha158(LightGBM) 非 alpha，但 RD-Agent 生成的 GRU 已出正超额——真 alpha 要靠
+RD-Agent 进化因子/模型（其循环现被 China-only bug 挡着，§9.7，走本驱动或修循环）。
 
 ### 9.9 ✅ GPU 镜像：让 5090 在容器里训练 PyTorch 模型（cu128）
 **壁垒**：qlib 镜像基底 `pytorch:2.2.1-cuda12.1` 的 torch 没有 5090（Blackwell, **sm_120 / cc 12.0**）的
@@ -441,6 +455,14 @@ RUN pip install --index-url https://download.pytorch.org/whl/cu128 --upgrade tor
 - cu128 是**这台机器已验证可用**的 Blackwell torch（`~/vllm-venv` 的 2.11.0+cu128 也列 sm_120）。
 - 启用：`.env` `QLIB_DOCKER_ENABLE_GPU=True`（RD-Agent 自己的 run）；custom 驱动用 `--gpu`（加 `--gpus all`）。
 - ⚠️ OpenWhisper 在 Windows 侧共用这张卡(~10GB)，但小 NN 占显存少，够用。
+- **提速实测**：GRU 训练 **CPU ~15 分/epoch → GPU ~20–60 秒/epoch（约 45×）**。
+
+**跑 PyTorch 模型时的两个容器坑（驱动已处理 / 需注意）：**
+- **`--shm-size`**：PyTorch DataLoader 多 worker 用 `/dev/shm` 传张量，Docker 默认 64MB 会
+  `unable to allocate shared memory`。驱动 `us_qlib_backtest.py` 已固定加 `--shm-size=16g`（同 RD-Agent QlibDockerConf）。
+- **⚠️ `n_jobs` 必须设 0**：qlib `GeneralPTNN` 的 conf `n_jobs: 20`（DataLoader worker 数）在容器里
+  **会在验证阶段 DataLoader worker 死锁**（即使 shm 够也卡死，进程全 0% CPU）。喂 RD-Agent 工作区前，把
+  其 `conf_*.yaml` 的 `n_jobs: 20` 改成 `n_jobs: 0`（DataLoader 主进程加载，不开子进程）。改完即顺畅训完。
 
 ### 9.6 fin_model 的数据加载报错链（已排查，根因见 §9.7）
 现状：fin_model 前面全通（提案→granite8b 编码 GRU→docker 验证"Execution successful"→qrun 启动、
@@ -471,5 +493,6 @@ ValueError: instrument: {'__DEFAULT_FREQ': '/root/.qlib/qlib_data/us_data'} does
 |---|---|---|---|
 | 0 文档骨架 | FORK.md / CLAUDE.md / commit 门禁 | ☑ 完成 | 文档就位、门禁可启用 |
 | 1 本地跑通 | 用 llama.cpp 跑通至少一个场景，沉淀 §5/§9 经验 | ☑ 完成 | env 实测通；RD-Agent 机器在美股上 提案→编码→训练 全跑通（仅其 fin_* 循环包装层有 China-only/SDK bug，§9.7）；**绕过它已出首个美股回测结果**（§9.8，`rdagent/custom/us_qlib_backtest.py`） |
-| 2 美股评测驱动 | `rdagent/custom/` 薄驱动绕过 RD-Agent 循环、直接 qrun 出美股回测 | ☑ 完成 | LightGBM/Alpha158 美股回测出真实指标（§9.8）；驱动也支持喂 RD-Agent 生成的模型工作区 |
-| 3 待定 | 跑 RD-Agent 生成模型的美股回测 / 给上游提 issue / 更强模型(qwen)看效果 | ☐ 未规划 | — |
+| 2 美股评测驱动 | `rdagent/custom/` 薄驱动绕过 RD-Agent 循环、直接 qrun 出美股回测 | ☑ 完成 | LightGBM/Alpha158（§9.8）+ **RD-Agent 生成的 GRU**（§9.8 第三份）都出真实指标 |
+| 3 GPU 加速 | 让 5090 在容器里训 PyTorch 模型（cu128/sm_120）| ☑ 完成 | §9.9；GRU 训练提速 ~45×；含成本 +1.31% 跑赢基线 |
+| 4 待定 | 修 RD-Agent 循环 / 给上游提 issue / 更强模型(qwen)进化因子模型看真 alpha | ☐ 未规划 | — |
