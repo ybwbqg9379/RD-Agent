@@ -21,9 +21,23 @@
 > **下一步（§10 Phase 4）**：让 RD-Agent **真正多轮进化**因子/模型去找稳健 alpha。第一步候选 = 换更强本地模型
 > （`qwen`，§5.3）+ 解决/绕过 RD-Agent 循环的上游 bug（绕过路已有：custom 驱动 §9.8；根因 §9.7）。
 >
+> **本会话新增（2026-06-14）— 三仓库协作 + 上实盘方向已定**：
+> - **三仓库协作图固化**在 `~/AI-STACK.md §7`（**跨仓库单一事实来源**）：`qlib`(回测引擎) → `RD-Agent`(研究工厂) →
+>   `TradingAgents`(决策/执行)。联动靠**文件契约不靠 import**。
+> - **qlib→RD-Agent**：`us_qlib_backtest.py` 加 `--qlib-src`——把本地 qlib 仓挂进容器（免 push+重建镜像即生效，
+>   自动叠回镜像编译的 cython `_libs` 解决 3.12/3.10 的 `.so` ABI）。
+> - **RD-Agent→TradingAgents**：新增 `rdagent/custom/export_signals.py`——`signals.parquet` 契约(schema v1:
+>   长表 `date/ticker/score`,higher=bullish)+ `.meta.json`。3 个 offline 测试。
+> - **上实盘方向：已定走「路线 A 量化机械执行」**（top-K 排序 + 周期调仓,无 per-trade 止盈止损;退出=掉出 top-K）。
+>   「冻结赢家模型」= **三件套**(因子定义 + 模型权重 + 策略配置),不是单个 .pkl。**TradingAgents 已有执行脚手架**
+>   (`tradingagents/custom/`: `Executor`/`PositionManager`/`AlpacaExecutor` paper 单已能下;塞自己的 `DecisionFn` 可绕过 LLM 辩论)。
+>   要写的新东西窄:①每日数据刷新 ②今日打分驱动 ③score→目标持仓(策略层)。**未决:第③步 A1(复用 qlib 策略,高保真重 infra)
+>   vs A2(自己重写 top-k-dropout + 保真护栏,我倾向 A2)**——下个 session 先定这个,再列接口/开写。**尚未开始写实盘代码。**
+>
 > **去哪查什么**：现状/路线图 → **§10**；本地怎么跑 + 所有坑 + 回测结果 → **§9**（尤其 §9.0 必备 .env、
-> §9.8 三份结果、§9.9 GPU+死锁）；和上游的差异清单 → **§6**；定制/commit 规范 → **§2/§3**；同步上游 → **§4**。
-> `.env` 已 gitignore，内容见 §5/§9.0（新 clone 照抄即可）。姊妹 `qlib` fork 有它自己的 FORK.md/交接块。
+> §9.8 三份结果、§9.9 GPU+死锁）；和上游的差异清单 → **§6**；定制/commit 规范 → **§2/§3**；同步上游 → **§4**；
+> **三仓库协作/上实盘架构 → `~/AI-STACK.md §7`**。`.env` 已 gitignore，内容见 §5/§9.0（新 clone 照抄即可）。
+> 姊妹 `qlib`、`TradingAgents` fork 各有自己的 FORK.md/交接块。
 
 ---
 
